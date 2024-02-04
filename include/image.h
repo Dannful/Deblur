@@ -12,6 +12,7 @@ typedef unsigned char PixelValue;
 typedef double Real;
 typedef std::complex<Real> ComplexNumber;
 typedef std::vector<ComplexNumber> ComplexVector;
+typedef std::vector<double> DoubleVector;
 
 class FrequencyDomain {
 public:
@@ -19,11 +20,17 @@ public:
 
     void convolveCircular(const ComplexVector &x);
 
+    void wienerFilter(const std::vector<DoubleVector> &kernel, double K);
+
     void deconvolveCircular(const ComplexVector &x);
 
-    void convolveKernel(double **kernel, int sizeX, int sizeY);
+    void convolveKernel(const std::vector<DoubleVector> &kernel);
 
-    void deconvolveKernel(double **kernel, int sizeX, int sizeY);
+    void deconvolveKernel(const std::vector<DoubleVector> &kernel);
+
+    void addBrightness(int value);
+
+    void adjustContrast(float value);
 
     [[nodiscard]] int getImageWidth() const;
 
@@ -49,7 +56,7 @@ private
 
     static ComplexVector circularConvolution(ComplexVector x, ComplexVector y);
 
-    ComplexVector fourierKernel(double **kernel, int sizeX, int sizeY);
+    [[nodiscard]] ComplexVector fourierKernel(const std::vector<DoubleVector> &kernel) const;
 
 };
 
@@ -69,15 +76,11 @@ public:
 
     [[nodiscard]] FrequencyDomain toFrequencyDomain() const;
 
-    void restoreFFT(FrequencyDomain &domain) const;
+    void restoreFFT(FrequencyDomain &domain, bool log = false) const;
 
-    void save(const char *filename) const;
+    void save(const char *filename, bool log = false) const;
 
     void equalizeHistogram() const;
-
-    void addBrightness(int value) const;
-
-    void adjustContrast(float value) const;
 
     [[nodiscard]] std::vector<int> getHistogram() const;
 
@@ -87,7 +90,6 @@ private:
     int channels;
     PixelValue **pixels;
     const unsigned char *rawData;
-    ComplexVector fftdata[DESIRED_CHANNELS];
 
     static ComplexVector convertToComplex(const unsigned char *data, int width, int height,
                                           unsigned short channels);

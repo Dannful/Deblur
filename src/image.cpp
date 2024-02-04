@@ -1,13 +1,15 @@
-#include <image.h>
 #include <iostream>
+#include <algorithm>
+#include <bits/stl_algo.h>
+
+#include <image.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-#include <algorithm>
 #include <stb_image_write.h>
-#include <bits/stl_algo.h>
+
 
 int Image::getChannels() const {
     return this->channels;
@@ -148,7 +150,6 @@ void FrequencyDomain::bluestein_fft(ComplexVector &x, const bool inverse) {
 
     for (size_t i = 0; i < n; i++) {
         x[i] = cvec[i] * expTable[i] / (inverse ? static_cast<double>(n) : 1.0);
-        // x[i] = ComplexNumber(roundToNDecimals(x[i].real(), 6), roundToNDecimals(x[i].imag(), 6));
     }
 }
 
@@ -177,8 +178,9 @@ FrequencyDomain Image::toFrequencyDomain() const {
     return FrequencyDomain(channels, getWidth(), getHeight());
 }
 
-void Image::restoreFFT(FrequencyDomain &domain) const {
-    std::cout << "Computing IFFT..." << std::endl;
+void Image::restoreFFT(FrequencyDomain &domain, const bool log) const {
+    if (log)
+        std::cout << "Computing IFFT..." << std::endl;
     for (int channel = 0; channel < DESIRED_CHANNELS; channel++) {
         FrequencyDomain::bluestein_fft(domain.getData()[channel], true);
         for (int pixel = 0; pixel < this->width * this->height; pixel++) {
@@ -188,9 +190,9 @@ void Image::restoreFFT(FrequencyDomain &domain) const {
                 round(domain.getData()[channel][pixel].real()), lowerBound,
                 upperBound));
         }
-        domain.getData()[channel].clear();
     }
-    std::cout << "IFFT computed successfully!" << std::endl;
+    if (log)
+        std::cout << "IFFT computed successfully!" << std::endl;
 }
 
 void FrequencyDomain::convolveCircular(const ComplexVector &x) {
@@ -199,6 +201,22 @@ void FrequencyDomain::convolveCircular(const ComplexVector &x) {
     for (int channel = 0; channel < DESIRED_CHANNELS; channel++)
         for (int coef = 0; coef < getData()->size(); coef++)
             getData()[channel][coef] *= x[coef];
+}
+
+void FrequencyDomain::wienerFilter(const std::vector<DoubleVector> &kernel, const double K) {
+    const ComplexVector H = fourierKernel(kernel);
+
+    ComplexVector H2(H.size());
+    for (int i = 0; i < H.size(); i++)
+        H2[i] = std::norm(H[i]);
+
+    ComplexVector Wiener(H.size());
+    for (int i = 0; i < H.size(); i++)
+        Wiener[i] = (1.0 / H[i]) * (H2[i] / (H2[i] + K));
+
+    for (int channel = 0; channel < DESIRED_CHANNELS; channel++)
+        for (int i = 0; i < getData()[channel].size(); i++)
+            getData()[channel][i] *= Wiener[i];
 }
 
 void FrequencyDomain::deconvolveCircular(const ComplexVector &x) {
@@ -218,25 +236,27 @@ int FrequencyDomain::getImageHeight() const {
 }
 
 
-void FrequencyDomain::convolveKernel(double **kernel, const int sizeX, const int sizeY) {
-    const auto newKernel = fourierKernel(kernel, sizeX, sizeY);
+void FrequencyDomain::convolveKernel(const std::vector<DoubleVector> &kernel) {
+    const auto newKernel = fourierKernel(kernel);
     convolveCircular(newKernel);
 }
 
-void FrequencyDomain::deconvolveKernel(double **kernel, const int sizeX, const int sizeY) {
-    const auto newKernel = fourierKernel(kernel, sizeX, sizeY);
+void FrequencyDomain::deconvolveKernel(const std::vector<DoubleVector> &kernel) {
+    const auto newKernel = fourierKernel(kernel);
     deconvolveCircular(newKernel);
 }
 
-void Image::save(const char *filename) const {
-    std::cout << "Saving image to " << filename << "..." << std::endl;
+void Image::save(const char *filename, const bool log) const {
+    if (log)
+        std::cout << "Saving image to " << filename << "..." << std::endl;
     const auto data = new PixelValue[DESIRED_CHANNELS * this->width * this->height];
     for (int pixel = 0; pixel < this->width * this->height; pixel++)
         for (int channel = 0; channel < DESIRED_CHANNELS; channel++)
             data[DESIRED_CHANNELS * pixel + channel] = this->pixels[channel][pixel];
     stbi_write_png(filename, this->width, this->height, DESIRED_CHANNELS, data, DESIRED_CHANNELS * this->width);
     delete[] data;
-    std::cout << "Image saved successfully!" << std::endl;
+    if (log)
+        std::cout << "Image saved successfully!" << std::endl;
 }
 
 void Image::equalizeHistogram() const {
@@ -254,17 +274,15 @@ void Image::equalizeHistogram() const {
                 255.0f));
 }
 
-void Image::addBrightness(const int value) const {
+void FrequencyDomain::addBrightness(const int value) {
     for (int channel = 0; channel < DESIRED_CHANNELS; channel++)
-        for (int pixel = 0; pixel < getWidth() * getHeight(); pixel++)
-            pixels[channel][pixel] = static_cast<PixelValue>(std::clamp(pixels[channel][pixel] + value, 0, 255));
+        getData()[channel][0] += ComplexNumber(getImageWidth() * getImageHeight() * value, 0);
 }
 
-void Image::adjustContrast(const float value) const {
-    for (int channel = 0; channel < DESIRED_CHANNELS; channel++)
-        for (int pixel = 0; pixel < getWidth() * getHeight(); pixel++)
-            pixels[channel][pixel] = static_cast<PixelValue>(std::clamp(
-                value * static_cast<float>(pixels[channel][pixel]), 0.0f, 255.0f));
+void FrequencyDomain::adjustContrast(const float value) {
+    for (auto &channel: data)
+        for (int pixel = 0; pixel < getImageWidth() * getImageHeight(); pixel++)
+            channel[pixel] *= ComplexNumber(value, 0);
 }
 
 std::vector<int> Image::getHistogram() const {
@@ -284,20 +302,23 @@ void FrequencyDomain::fftshift(ComplexVector &x) {
         std::swap(x[i], x[i + size / 2]);
 }
 
-ComplexVector FrequencyDomain::fourierKernel(double **kernel, const int sizeX, const int sizeY) {
-    const auto size = getData()->size();
-    auto newKernel = ComplexVector(size, ComplexNumber(0, 0));
-    const int mid = static_cast<int>(size) / 2;
-    const int midX = sizeX / 2;
-    const int midY = sizeY / 2;
-    for (int x = -midX; x <= midX; x++)
-        for (int y = -midY; y <= midY; y++)
-            newKernel[mid + y * getImageWidth() * DESIRED_CHANNELS + x] = std::complex<double>(
-                kernel[y + midY][x + midX], 0);
-    for (int y = 0; y < sizeY; y++)
-        delete[] kernel[y];
-    delete[] kernel;
-    fftshift(newKernel);
-    bluestein_fft(newKernel, false);
-    return newKernel;
+ComplexVector FrequencyDomain::fourierKernel(const std::vector<DoubleVector> &kernel) const {
+    ComplexVector centeredKernel(getImageWidth() * getImageHeight(), ComplexNumber(0, 0));
+
+    const auto sizeY = kernel.size();
+    const auto sizeX = kernel[0].size();
+    const int centerX = getImageWidth() / 2;
+    const int centerY = getImageHeight() / 2;
+    const int kernelCenterX = static_cast<int>(sizeX) / 2;
+    const int kernelCenterY = static_cast<int>(sizeY) / 2;
+
+    for (int i = 0; i < sizeY; i++) {
+        for (int j = 0; j < sizeX; j++) {
+            centeredKernel[(centerY - kernelCenterY + i) * getImageWidth() + centerX - kernelCenterX + j] = kernel[i][
+                j];
+        }
+    }
+    fftshift(centeredKernel);
+    bluestein_fft(centeredKernel, false);
+    return centeredKernel;
 }
